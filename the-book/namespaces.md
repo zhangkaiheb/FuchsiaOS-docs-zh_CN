@@ -1,298 +1,212 @@
-# Fuchsia Namespaces
+# Fuchsia命名空间
 
-Namespaces are the backbone of file access and service discovery in Fuchsia.
+命名空间是Fuchsia操作系统中文件存取和服务发现的基石。
 
-## Definition
+## 定义
 
-A namespace is a composite hierarchy of files, directories, sockets, services,
-devices, and other named objects which are provided to a component by its
-environment.
+命名空间是一个综合的层级结构，包括文件、目录、套接口、服务、设备和其它的有名对象，这些对象被其环境提供给组件使用。
 
-Let's unpack that a little bit.
+让我们稍微解释一下。
 
-**Objects are named**: The namespace contains _objects_ which can be enumerated
-and accessed by name, much like listing a directory or opening a file.
 
-**Composite hierarchy**: The namespace is a _tree_ of objects which has been
-assembled by _combining_ together subtrees of objects from other namespaces
-into a composite structure where each part has been assigned a path prefix
-by convention.
+**有名对象**: 命名空间中包含的可由名字枚举和访问的对象，诸如列出一个目录的内容和打开一个文件。
 
-**Namespace per component**: Every component receives its own namespace
-tailored to meet its own needs.  It can also publish objects of its own
-to be included in other namespaces.
+**综合层级结构**: 命名空间为一个由对象组成的树状结构，这些对象可由其它命名空间的对象子树组合而来，从而形成一个综合的层级结构，按照惯例，其中的每个部分都被赋予一个路径前缀。
 
-**Constructed by the environment**: The environment which instantiates a
-component is responsible for constructing an appropriate namespace for that
-component within that scope.
+**组件之命名空间**: 每个组件裁剪自身的命名空间以符合自身的需求。它也可发布自身的对象到其它的命名空间中。
 
-Namespaces can also be created and used independently from components although
-this document focuses on typical component-bound usage.
+**环境构造**: 实例化组件的环境需要负责构造合适的命名空间，以便组件运行在合适的范围。
 
-## Namespaces in Action
+虽然本文档专注于介绍典型的绑定组件的命名空间用法，但是命名空间也可被独立的创建和使用。
 
-You have probably already spent some time exploring a Fuchsia namespace;
-they are everywhere.  If you type `ls /` at a command-line shell prompt
-you will see a list of some of the objects which are accessible from the
-shell's namespace.
+## 命名空间实战
 
-Unlike other operating systems, Fuchsia does not have a "root filesystem".
-As described earlier, namespaces are defined per-component rather than
-globally or per-process.
+你可能已经花费了许多时间在Fuchsia命名空间的探索上，它们无处不在。如果你在命令行提示符下键入`ls /`，将会看到需要对象列表，表明这些对象在shell命令行的命名空间中时可访问的。
 
-This has some interesting implications:
+不同于其它操作系统，Fuchsia没有"根文件系统"。正如之前所述，命名空间基于组件而定义，并不是全局有效的，也非基于进程的。
 
-- There is no global "root" namespace.
-- There is no concept of "running in a chroot-ed environment" because every
-  component [effectively has its own private "root"](dotdot.md).
-- Components receive namespaces which are tailored to their specific needs.
-- Object paths may not be meaningful across namespace boundaries.
-- A process may have access to several distinct namespaces at once.
-- The mechanisms used to control access to files can also be used to control
-  access to services and other named objects on a per-component basis.
+这包含了一些有趣的隐含点:
 
-## Objects
+- 没有全局的"root"命名空间.
+- 没有类似Linux中的概念"运行在chroot-ed的环境中"，因为每个组件 [实质上由其私有的"root"](dotdot.md).
+- 组件接受的命名空间据其特定需求进行了裁剪.
+- 在命名空间边界之外，对象的路径可能没有意义.
+- 在某一时刻，进程可拥有访问多个截然不同的命名空间的权限.
+- 以组件为基础，控制访问文件的权限机制，也可用来控制对服务的访问，以及对其它有名对象的访问.
 
-The items within a namespace are called objects.  They come in various flavors,
-including:
+## 对象
 
-- Files: objects which contain binary data
-- Directories: objects which contain other objects
-- Sockets: objects which establish connections when opened, like named pipes
-- Services: objects which provide FIDL services when opened
-- Devices: objects which provide access to hardware resources
+命名空间中的成员称为对象。它们以多种形式存在，包括:
 
-### Accessing Objects
+- 文件: 包含二进制数据的对象
+- 目录: 包含其它对象的对象
+- 套接口: 打开后可建立连接的对象, 类似命名管道
+- 服务: 打开后提供FIDL服务的对象
+- 设备: 提供访问硬件资源的对象
 
-To access an object within a namespace, you must already have another object
-in your possession.  A component typically receives channel handles for
-objects in the scope of its namespace during
-[Namespace Transfer](#namespace-transfer).
+### 对象的访问
 
-You can also create new objects out of thin air by implementing the
-appropriate FIDL interfaces.
+为了访问命名空间中的对象，你必须已经拥有另外一个对象。典型的，在[命名空间转移](#namespace-transfer)过程中，组件会在其命名空间的范围内接收到对象的通道句柄.
 
-Given an object's channel, you can open a channel for one of its sub-objects
-by sending it a FIDL message which includes an object relative path expression
-which identifies the desired sub-object.  This is much like opening files
-in a directory.
+通过执行合适的FIDL接口，你也可凭空创建出一个新的对象。
 
-Notice that you can only access objects which are reachable from the ones
-you already have access to.  There is no ambient authority.
+给定一个对象的通道，你可以打开其子对象的通道，方法是给其发送一条FIDL消息，消息内容包含表示希望打开的子对象的相对路径表达式.
 
-We will now define how object names and paths are constructed.
+注意，你仅可访问对于已在访问对象可达的对象。没有依据环境的授权。
 
-### Object Names
+现在我们看一下对象的名称和路径时如何构建的.
 
-An object name is a locally unique label by which an object can be located
-within a container (such as a directory).  Note that the name is a property
-of the container's table of sub-objects rather than a property of the object
-itself.
 
-For example, `cat` designates a furry object located within some unspecified
-recipient of an `Open()` request.
+### 对象名称
 
-Objects are fundamentally nameless but they may be called many names by others.
+对象名称时一个本地唯一的标签，据此对象可安置于一个容器内（例如目录）。注意，名称是容器的子对象表的一个属性，而不是对象本身的属性。
 
-Object names are represented as binary octet strings (arbitrary sequences
-of bytes) subject to the following constraints:
+例如，`cat` 指派一个对象，位于由调用`Open()`请求的一些不明确接收者中。
 
-- Minimum length of 1 byte.
-- Maximum length of 255 bytes.
-- Does not contain NULs (zero-valued bytes).
-- Does not contain `/`.
-- Does not equal `.` or `..`.
-- Always compared using byte-for-byte equality (implies case-sensitive).
+从根本上讲，对象没有名字，但是又可以有多个称呼。
 
-Object names are valid arguments to a container's `Open()` method.
-See [FIDL Interfaces](#fidl-interfaces).
+对象名称由二进制8位组字符组成（字节顺序任意），受限于以下约束:
 
-It is intended that object names be encoded and interpreted as human-readable
-sequences of UTF-8 graphic characters, however this property is not enforced
-by the namespace itself.
+- 最小长度1个字节.
+- 最大长度255个字节.
+- 不包含 NULs (零值字节).
+- 不包含 `/`.
+- 不等于 `.` or `..`.
+- 总是可比较的字节等式 (意味着区分字母大小写).
 
-Consequently clients are responsible for deciding how to present names
-which contain invalid, undisplayable, or ambiguous character sequences to
-the user.
+对于容器的`Open()`方法，对象名称是有效的参数。详见 [FIDL Interfaces](#fidl-interfaces).
 
-_TODO(jeffbrown): Document a specific strategy for how to present names._
+对象的命名倾向于使用可编码和可解释为人可读的UTF-8图形字符序列，但是命名空间自身并未强加这一要求。
 
-### Object Relative Path Expressions
+实际上，客户有责任决定如何对用户程序呈现包含无效的、不可显示的、或者晦涩的字符序列名称。
 
-An object relative path expression is an object name or a `/`-delimited
-sequence of object names designating a sequence of nested objects to be
-traversed in order to locate an object within a container (such as a
-directory).
 
-For example, `house/box/cat` designates a furry object located within its
-containing object called `box` located within its containing object called
-`house` located within some unspecified recipient of an `Open()` request.
+_TODO(jeffbrown): 文档化一个如何命名的明确策略._
 
-An object relative path expression always traverses deeper into the namespace.
-Notably, the namespace does not directly support upwards traversal out of
-containers (e.g. via `..`) but this feature may be partially emulated by
-clients (see below).
+### 对象的相对路径表达式
 
-Object relative path expressions have the following additional constraints:
+对象的相对路径表达式可以是一个对象名称，或者以`/`分隔的对象名称，其指定了一系列的嵌套的对象，为了定位容器中的对象需要穿越这些对象（例如目录）。
 
-- Minimum length of 1 byte.
-- Maximum length of 4095 bytes.
-- Does not begin or end with `/`.
-- All segments are valid object names.
-- Always compared using byte-for-byte equality (implies case-sensitive).
+例如，`house/box/cat` 指定的对象位于它的容器对象`box`中，而`box`位于其容器对象`house`内，`house`位于未指明的`Open()`请求的接收者中。
 
-Object relative path expressions are valid arguments to a container's `Open()`
-method.  See [FIDL Interfaces](#fidl-interfaces).
+对象的相对路径表达式总是向命名空间的深层穿越。特别的，命名空间不直接支持脱离容器的向上穿越（如通过`..`），但是客户可以部分的模仿此功能。
 
-### Client Interpreted Path Expressions
+对象的相对路径表达式受以下的额外约束:
 
-A client interpreted path expression is a generalization of object relative
-path expressions which includes optional features which may be emulated
-by client code to enhance compatibility with programs which expect a rooted
-file-like interface.
+- 最小长度1个字节.
+- 最大长度4095字节.
+- 不能以 `/` 开头或结尾.
+- 每个片段都是有效的对象名称.
+- 总是可比较的字节等式 (意味着区分字母大小写).
 
-Technically these features are beyond the scope of the Fuchsia namespace
-protocol itself but they are often used so we describe them here.
+对象的相对路径表达式是容器`Open()`方法有效参数。详见 [FIDL Interfaces](#fidl-interfaces).
 
-- A client may designate one of its namespaces to function as its "root".
-  This namespace is denoted `/`.
-- A client may construct paths relative to its designated root namespace
-  by prepending a single `/`.
-- A client may construct paths which traverse upwards from containers using
-  `..` path segments by folding segments together (assuming the container's
-  path is known) through a process known as client-side "canonicalization".
-- These features may be combined together.
+### 解释路径表达式的客户
 
-For example, `/places/house/box/../sofa/cat` designates a furry object
-located at `places/house/sofa/cat` within some client designated "root"
-container.
+客户解释路径表达式是一种对对象路径表达式的泛化，这些表达式含有可选的特性，客户模拟这些特性以便增强与期望存在具有根的类似文件接口程序的兼容。
 
-Client interpreted path expressions that contain these optional features
-are not valid arguments to a container's `Open()` method; they must be
-translated by the client prior to communicating with the namespace.
-See [FIDL Interfaces](#fidl-interfaces).
+技术上讲，这些特性超出了Fuchsia命名空间协议自身的范围，但是又经常使用到，所以在此描述.
 
-For example, `fdio` implements client-side interpretation of `..` paths
-in file manipulation APIs such as `open()`, `stat()`, `unlink()`, etc.
+- 客户可指定其命名空间之一作为根"root". 此命名空间表示为 `/`.
+- 客户可通过增加单一的前缀`/`，来构建相对于指定根命名空间的路径.
+- 客户可使用`..`路径片段折叠路径，通过客户端"标准"进程来构建自容器向上穿越的路径（假设容器的路径已知）.
+- 这些特性可组合在一起.
 
-## Namespace Transfer
+例如，`/places/house/box/../sofa/cat` 指定了一些客户"根"容器内位于 `places/house/sofa/cat`位置的对象。
 
-When a component is instantiated in an environment (e.g. its process is
-started), it receives a table which maps one or more namespace path prefixes
-to object handles.
+包含这些可选特性的客户解释路径表达式不是有效的容器`Open()` 方法的参数；它们必须先由客户翻译后才能与命名空间交互。 See [FIDL Interfaces](#fidl-interfaces).
 
-The path prefixes in the table encode the intended significance of their
-associated objects by convention.  For example, the `pkg` prefix should
-be associated with a directory object which contains the component's own
-binaries and assets.
+例如，`fdio`在文件操作API中实现了客户一端对`..`路径的解释，这些API诸如`open()`, `stat()`, `unlink()`等.
 
-More on this in the next section.
+## 命名空间转移
 
-## Namespace Conventions
+当一个组件在环境中被实例化（如，它的进程启动），它接收到一个映射了一个或多个命名空间路径前缀到对象句柄的表.
 
-This section describes the conventional layout of namespaces for typical
-components running on Fuchsia.
+依据惯例，表中路径前缀的编码与其关联对象的有暗指意义。 例如，`pkg`前缀应当关联与包含组件自身二进制文件和资产的目录。
 
-The precise contents and organization of a component's namespace varies
-greatly depending on the component's role, type, identity, scope,
-relation to other components, and rights. See [sandboxing.md] for information
-about how namespaces are used to create sandboxes for components.
+更多相关内容在下节介绍。
 
-_For more information about the namespace your component can expect to
-receive from its environment, please consult the documentation related to
-the component type you are implementing._
+## 命名空间协定
 
-### Typical Objects
+本节描述运行在Fuchsia系统中的典型组件的命名空间常规布局.
 
-There are some typical objects which a component namespace might contain:
+组件命名空间的准确内容和组织依据组件的角色、类型、身份、范畴、与其它组件的关系、以及权限会有很大的不同。详见 [sandboxing.md] 中命名空间如何为组件创建沙盒sndboxes的内容.
 
-- Read-only executables and assets from the component's package.
-- Private local persistent storage.
-- Private temporary storage.
-- Services offered to the component by the system, the component framework,
-  or by the client which started it.
-- Device nodes (for drivers and privileged components).
-- Configuration information.
+_关于你的组件期待接收自环境的命名空间的更多内容，请参考你所实现的组件类型的关联文档._
 
-### Typical Directory Structure
+### 典型对象
 
-- `pkg/`: the contents of the current program's package
-  - `bin/`: executable binaries within the package
-  - `lib/`: shared libraries within the package
-  - `data/`: data, such as assets, within the package
-- `data/`: local persistent storage (read-write, private to the package)
-- `tmp/`: temporary storage (read-write, private to the package)
-- `svc/`: services offered to the component
-  - `fuchsia.process.Launcher`: launch processes
-  - `fuchsia.logger.Log`: log messages
-  - `vendor.topic.Interface`: service defined by a _vendor_
-- `dev/`: device tree (relevant portions visible to privileged components as needed)
+组件命名空间可能包含的一些典型对象:
+
+- 组件包中的只读可执行文件和资产.
+- 私有的本地持久存储.
+- 私有的临时存储.
+- 系统、组件框架、或者启动组件的客户提供于组件的服务.
+- 设备节点 (对于驱动和特权组件).
+- 配置信息.
+
+### 典型目录结构
+
+- `pkg/`: 当前程序包的内容
+  - `bin/`: 包内的可执行二进制文件
+  - `lib/`: 包内的共享库
+  - `data/`: 包内的数据，如资产
+- `data/`: 本地持久存储 (可读写read-write, 包私有)
+- `tmp/`: 临时存储 (可读写, 包私有)
+- `svc/`: 提供给组件的服务
+  - `fuchsia.process.Launcher`: 加载进程
+  - `fuchsia.logger.Log`: 日志信息
+  - `vendor.topic.Interface`: _厂商_ 定义服务
+- `dev/`: 设备树 (按照需要对特权组件可见的部分)
   - `class/`, ...
-- `hub/`: introspect the system, see [hub.md] (privileged components only)
-- `config/`: configuration data for the component
+- `hub/`: 内省系统, 参见 [hub.md] (仅特权组件)
+- `config/`: 组件的配置数据
 
-## Namespace Participants
+## 命名空间参与者
 
-Here is some more information about a few abstractions which interact with
-and support the Fuchsia namespace protocol.
+这里结束一些与Fuchsia命名空间协议交互或者提供支持的抽象层的信息。
 
-### Filesystems
+### 文件系统
 
-Filesystems make files available in namespaces.
+文件系统使得文件在命名空间中可用.
 
-A filesystem is simply a component which publishes file-like objects which
-are included in someone else's namespace.
+简单来说文件系统是一个组件，其可将其它命名空间中的对象以类似文件的形式发布。
 
-### Services
+### 服务
 
-Services live in namespaces.
+服务生存与命名空间中.
 
-A service is a well-known object which provides an implementation of a FIDL
-interface which can be discovered using the namespace.
+服务是众所周知的对象，提供可由命名空间发现的FIDL接口实现。
 
-A service name corresponds to a path within the `svc` branch of the namespace
-from which a component can access an implementation of the service.
+服务的名称相当与命名空间中`svc`分支下的路径，由此组件可访问服务的实现。
 
-For example, the name of the default Fuchsia logging service is
-`fuchsia.logger.Log` and its location in the namespace is
-`svc/fuchsia.logger.Log`.
+例如，Fuchsia系统默认的日志服务的名称为`fuchsia.logger.Log`，它在命名空间中的位置为`svc/fuchsia.logger.Log`.
 
-### Components
+### 组件
 
-Components consume and extend namespaces.
+组件消耗并且扩展命名空间。
 
-A component is an executable program object which has been instantiated
-within some environment and given a namespace.
+组件时一个可执行的程序对象，在一定环境下被实例化并且给与命名空间。
 
-A component participates in the Fuchsia namespace in two ways:
+组件以两种方式参与Fuchsia的命名空间:
 
-1. It can use objects from the namespace which it received from its environment,
-   notably to access its own package contents and incoming services.
+1. 可使用接收自环境发来的命名空间中的对象，特别的，可访问自身的包内容和收到的服务。
 
-2. It can publish objects through its environment in the form of a namespace,
-   parts of which its environment may subsequently make available to other
-   components upon request.  This is how services are implemented by
-   components.
+2. 可以命名空间的形式通过其环境发布对象，随后其环境可在收到请求时，使部分对象对其它组件可用。这是组件实现服务的方式。
 
-### Environments
+### 环境
 
-Environments construct namespaces.
+环境构建命名空间.
 
-An environment is a container of components.  Each environment is responsible
-for _constructing_ the namespace which its components will receive.
+环境作为组件的容器。每个环境有责任_构建_其组件将接收的命名空间。
 
-The environment decides what objects a component may access and how the
-component's request for services by name will be bound to specific
-implementations.
+环境决定组件可能访问哪些对象，以及组件按照名称请求的服务如何绑定到具体的实现。
 
-### Configuration
+### 配置
 
-Components may have different kinds of configuration data exposed to them
-depending on the features listed in their [Component
-Manifest](package_metadata.md#Component-Manifest) which are exposed as files in
-the /config namespace entry. These are defined by the feature set of the
-component.
+组件可能有不同类型的配置数据，取决于其  [Component Manifest](package_metadata.md#Component-Manifest) 中列出的特性，以文件的形式在/config命名空间中显示。这些有组件的特性集所定义。
 
-## FIDL Interfaces
+## FIDL 接口
 
-_TODO(jeffbrown): Explain how the namespace interfaces work._
+_TODO(jeffbrown): 解释命名空间接口如何工作._
+
